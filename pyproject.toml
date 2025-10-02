@@ -1,0 +1,46 @@
+[project]
+name = "anonymization"
+version = "0.1.0"
+description = "Anonymized RAG ingestion and retrieval system with FAISS"
+authors = [
+    {name = "Me", email = "me@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "faiss-cpu>=1.8.0",
+    "numpy>=1.26",
+    "ollama>=0.3.0",
+    "pypdf>=4.2.0",
+    "python-docx>=1.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "black>=24.3.0",
+    "ruff>=0.5.0",
+    "pytest>=8.0.0",
+    "mypy>=1.10.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+include = ["*.py", "config.json"]
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

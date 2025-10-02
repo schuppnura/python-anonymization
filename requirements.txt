@@ -1,0 +1,9 @@
+faiss-cpu==1.8.0.post1
+numpy>=1.26
+ollama>=0.3.0
+pypdf>=4.2.0
+python-docx>=1.1.0
+black>=24.3.0
+ruff>=0.5.0
+pytest>=8.0.0
+mypy>=1.10.0
