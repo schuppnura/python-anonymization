@@ -1,26 +1,26 @@
 # Anonymization RAG System
 
-🔒 A privacy-focused document processing and retrieval system using FAISS for vector storage and local AI models through Ollama.
+A privacy-focused document processing and retrieval system using FAISS for vector storage and local AI models through Ollama.
 
-## ✨ Features
+## Features
 
-- **🛡️ Privacy-First**: Document anonymization with optional LLM-based privacy filtering
-- **⚡ Vector Search**: High-performance semantic search using FAISS
-- **🧠 Local AI**: Uses Ollama for embeddings and privacy filtering
-- **📄 Multi-Format**: Supports PDF and DOCX document processing
-- **🔍 RAG Pipeline**: Complete ingestion and retrieval workflow
-- **🏗️ Modular Design**: Clean separation of concerns across components
+- Privacy-First: Document anonymization with optional LLM-based privacy filtering
+- Vector Search: High-performance semantic search using FAISS
+- Local AI: Uses Ollama for embeddings and privacy filtering
+- Multi-Format: Supports PDF and DOCX document processing
+- RAG Pipeline: Complete ingestion and retrieval workflow
+- Modular Design: Clean separation of concerns across components
 
-## 🏗️ Architecture
+## Architecture
 
 ### Core Components
 
-- **Document Loader**: Extracts text from PDF and DOCX files
-- **Chunking**: Intelligent text segmentation with overlap
-- **Embedding**: Vector generation using local Ollama models
-- **FAISS Store**: Persistent vector index storage
-- **Privacy Filter**: Optional anonymization using LLM
-- **Query Engine**: Semantic search and retrieval
+- Document Loader: Extracts text from PDF and DOCX files
+- Chunking: Intelligent text segmentation with overlap
+- Embedding: Vector generation using local Ollama models
+- FAISS Store: Persistent vector index storage
+- Privacy Filter: Optional anonymization using LLM
+- Query Engine: Semantic search and retrieval
 
 ### Key Design Patterns
 
@@ -29,7 +29,7 @@
 - **Error Resilience**: Comprehensive error handling throughout
 - **Modular Components**: Easily extensible and testable design
 
-## 📦 Dependencies
+## Dependencies
 
 - `faiss-cpu`: Vector similarity search
 - `numpy`: Numerical computing
@@ -44,13 +44,13 @@
 - `pytest`: Testing framework
 - `mypy`: Static type checking
 
-## 🚀 Setup
+## Setup
 
 ### Prerequisites
 
-- **Python 3.11+**: Required for modern type hints
-- **UV Package Manager**: Fast Python package manager ([installation guide](https://docs.astral.sh/uv/getting-started/installation/))
-- **Ollama**: Local AI model server ([ollama.ai](https://ollama.ai))
+- Python 3.11+: Required for modern type hints
+- UV Package Manager: Fast Python package manager ([installation guide](https://docs.astral.sh/uv/getting-started/installation/))
+- Ollama: Local AI model server ([ollama.ai](https://ollama.ai))
 
 ### Installation
 
@@ -58,14 +58,14 @@
 # Clone or navigate to the project directory
 cd Anonymization
 
-# Install dependencies with UV
+# Install dependencies with UV (uses external virtualenv from .env configuration)
 uv sync
 
 # Install development dependencies
 uv sync --group dev
 
-# Activate the virtual environment
-source .venv/bin/activate
+# Note: Virtual environment is managed externally at ~/.local/share/virtualenvs/Anonymization
+# UV automatically uses it when configured via .env file
 ```
 
 ### Required Models
@@ -82,7 +82,7 @@ ollama pull bge-large
 ollama pull llama3.1:8b-instruct-q4_K_M
 ```
 
-## 📚 Usage
+## Usage
 
 ### Configuration
 
@@ -138,34 +138,39 @@ uv run pytest
 make dev-check  # if Makefile exists
 ```
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 Anonymization/
 ├── main.py              # CLI entry point
-├── pipeline.py          # Document processing pipeline
 ├── query.py             # Search and retrieval
 ├── document_loader.py   # File parsing utilities
-├── embedding.py         # Vector generation
-├── faiss_store.py       # FAISS index management
 ├── anonymiser.py        # Privacy filtering
-├── constants.py         # Configuration constants
 ├── config.json          # Runtime configuration
 ├── pyproject.toml       # UV dependency management
 ├── requirements.txt     # Pip fallback dependencies
+├── uv.lock              # UV dependency lock file
+├── Makefile             # Development automation
+├── .env                 # Environment configuration
+├── .python-version      # Python version specification
 ├── tests/               # Test suite
+│   ├── conftest.py      # Test configuration
+│   ├── test_anonymiser.py # Anonymization tests
+│   ├── test_chunking.py # Text chunking tests
+│   └── test_roundtrip.py # End-to-end tests
 ├── data/                # Generated indices and metadata
-└── README.md
+│   └── redaction_report.json # Privacy filtering reports
+└── README.md            # Project documentation
 ```
 
-## 🔒 Privacy Features
+## Privacy Features
 
 - **Document Anonymization**: Remove or mask sensitive information
 - **LLM Privacy Filter**: Optional AI-based content screening
 - **Local Processing**: All operations run locally (no cloud APIs)
 - **Configurable Filtering**: Adjust privacy levels per use case
 
-## 🧑‍💻 Development Notes
+## Development Notes
 
 ### Core Functions
 
@@ -186,7 +191,7 @@ Anonymization/
 | `embedding_model` | `mxbai-embed-large` | Ollama embedding model |
 | `use_llm_privacy_filter` | `false` | Enable AI-based anonymization |
 
-## 🚀 Getting Started
+## Getting Started
 
 1. **Setup Environment**: Install UV and Ollama
 2. **Install Dependencies**: Run `uv sync`
@@ -195,18 +200,18 @@ Anonymization/
 5. **Ingest Documents**: Add documents to the FAISS index
 6. **Query System**: Search and retrieve relevant information
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 - **FAISS Issues**: Ensure `faiss-cpu` is properly installed
 - **Ollama Connection**: Verify Ollama server is running (`ollama serve`)
 - **Model Errors**: Check that required models are pulled locally
 - **Memory Issues**: Adjust chunk sizes for large documents
 
-## 📋 Roadmap
+## Roadmap
 
-- ✅ **Basic RAG Pipeline** - Complete
-- ✅ **FAISS Integration** - Complete
-- ✅ **Privacy Filtering** - Complete
-- 🔄 **Batch Processing** - Planned
-- 🔄 **Web Interface** - Planned
-- 🔄 **Advanced Anonymization** - Planned
+- **Basic RAG Pipeline** - Complete
+- **FAISS Integration** - Complete
+- **Privacy Filtering** - Complete
+- **Batch Processing** - Planned
+- **Web Interface** - Planned
+- **Advanced Anonymization** - Planned
