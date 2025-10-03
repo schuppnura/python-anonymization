@@ -1,8 +1,9 @@
 {
+  "llm_person_model_name": "llama3.1:8b-instruct-q4_K_M",
+  "llm_person_redaction_enabled": true,
   "embedding_model": "mxbai-embed-large",
   "chunk_size": 800,
   "chunk_overlap": 120,
-  "use_llm_privacy_filter": false,
   "index_path": "data/index.faiss",
   "metadata_path": "data/metadata.jsonl",
   "log_level": "INFO"

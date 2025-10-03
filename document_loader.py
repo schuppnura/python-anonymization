@@ -1,8 +1,11 @@
+# document_loader.py
 from pathlib import Path
+from typing import Union
 from pypdf import PdfReader
 from docx import Document
 
-def read_document_to_text(input_path: Path) -> str:
+def read_document_to_text(input_path: Union[str, Path]) -> str:
+    input_path = Path(input_path)  # <- coerce here
     suffix = input_path.suffix.lower()
     if suffix == ".txt":
         return read_txt(input_path)
@@ -11,17 +14,13 @@ def read_document_to_text(input_path: Path) -> str:
     if suffix == ".docx":
         return read_docx(input_path)
     raise ValueError(f"Unsupported file type: {suffix}")
-
+    
 def read_txt(input_path: Path) -> str:
-    with input_path.open("r", encoding="utf-8", errors="replace") as f:
-        return f.read()
+    return input_path.read_text(encoding="utf-8", errors="replace")
 
 def read_pdf(input_path: Path) -> str:
     reader = PdfReader(str(input_path))
-    parts: list[str] = []
-    for page in reader.pages:
-        parts.append(page.extract_text() or "")
-    return "\n".join(parts)
+    return "\n".join((page.extract_text() or "") for page in reader.pages)
 
 def read_docx(input_path: Path) -> str:
     doc = Document(str(input_path))

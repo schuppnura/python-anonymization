@@ -1,5 +1,8 @@
+# anonymiser.py
 import re
+from pathlib import Path
 from constants import PII_REGEX_PATTERNS
+from llm_redactor import redact_block, redact_person_names_using_llm
 
 def apply_regex_redaction(text: str) -> str:
     redacted = text
@@ -7,22 +10,14 @@ def apply_regex_redaction(text: str) -> str:
         redacted = re.sub(pattern, f"[REDACTED_{pii_type.upper()}]", redacted)
     return redacted
 
-def decide_sentence_is_sensitive(sentence: str) -> bool:
-    # Placeholder: integrate local LLM call later
-    return False
-
-def apply_contextual_redaction(text: str, use_llm_privacy_filter: bool) -> str:
-    if not use_llm_privacy_filter:
+def apply_person_redaction_with_llm(text: str, model_name: str, enabled: bool, debug_report_path: Path | None = None) -> str:
+    if not enabled:
         return text
-    sentences = split_sentences_simple(text)
-    safe_sentences: list[str] = []
-    for s in sentences:
-        if decide_sentence_is_sensitive(s):
-            safe_sentences.append("[REDACTED_CONTEXT]")
-        else:
-            safe_sentences.append(s)
-    return " ".join(safe_sentences)
-
-def split_sentences_simple(text: str) -> list[str]:
-    candidates = [t.strip() for t in re.split(r"(?<=[.!?])\s+", text)]
-    return [c for c in candidates if c]
+    # Write one redaction report per ingest to inspect detections
+    return redact_person_names_using_llm(
+        text=text,
+        model_name=model_name,
+        max_block_chars=2000,
+        placeholder="[REDACTED_PERSON]",
+        write_report_to=debug_report_path,
+    )
