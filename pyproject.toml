@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "faiss-cpu>=1.8.0",
     "langdetect>=1.0.9",
+    "langid>=1.1.6",
     "numpy>=1.26",
     "ollama>=0.3.0",
     "pypdf>=4.2.0",

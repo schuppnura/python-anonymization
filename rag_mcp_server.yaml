@@ -1,0 +1,226 @@
+openapi: 3.1.0
+info:
+  title: Privacy-Preserving RAG MCP Server
+  version: 1.0.0
+  description: >
+    API for anonymising documents (LLM + regex span masking), ingesting filtered
+    text into FAISS, and querying anonymised chunks for RAG. The service never
+    exposes raw PII; only filtered text with placeholders (e.g., [FILTERED_PERSON]).
+
+servers:
+  - url: http://127.0.0.1:8000
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /redact:
+    post:
+      summary: Redact PII from raw text (no persistence)
+      operationId: postRedact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RedactRequest"
+      responses:
+        "200":
+          description: Redacted preview returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedactResponse"
+        "400":
+          description: Bad request
+
+  /query:
+    post:
+      summary: Query the FAISS index of anonymised chunks
+      operationId: postQuery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryRequest"
+      responses:
+        "200":
+          description: Top-k results from anonymised corpus
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResponse"
+        "404":
+          description: Index or metadata not found
+
+  /upload:
+    post:
+      summary: Upload a document for redact or ingest
+      description: >
+        Multipart upload endpoint supporting two modes:
+        - **ingest**: anonymise, chunk, embed, and persist to FAISS/metadata; also writes a `.redacted.txt`.
+        - **redact**: anonymise only and return the filtered preview (no FAISS write).
+      operationId: postUpload
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, mode]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: .docx or .pdf (plain .txt accepted as well)
+                mode:
+                  type: string
+                  enum: [ingest, redact]
+                source_label:
+                  type: string
+                  description: Optional label/path to store in metadata for provenance
+                language_hint:
+                  type: string
+                  description: Optional language override (nl|fr|en); auto-detected if omitted
+                write_redacted:
+                  type: boolean
+                  description: If true in redact mode, write a sidecar `.redacted.txt` into /data
+      responses:
+        "200":
+          description: Operation completed
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/UploadRedactResponse"
+                  - $ref: "#/components/schemas/UploadIngestResponse"
+        "400":
+          description: Bad request (unsupported file, missing parts)
+        "500":
+          description: Processing failure
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+
+    RedactRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: Raw input text to anonymise
+        language_hint:
+          type: string
+          description: Optional language override ('nl'|'fr'|'en'); auto-detect if omitted
+        llm_pii_model_name:
+          type: string
+          description: Optional override for local LLM used for span detection (defaults from server config)
+
+    RedactResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        language:
+          type: string
+          example: nl
+        filtered_preview:
+          type: string
+          description: Text with placeholders (e.g., [FILTERED_PERSON])
+        # Optional: include a small QA artifact path if server writes one
+        debug_report_path:
+          type: string
+          nullable: true
+
+    QueryRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          description: Natural language query
+        top_k:
+          type: integer
+          default: 5
+          minimum: 1
+
+    QueryHit:
+      type: object
+      properties:
+        vector_id:
+          type: integer
+        distance:
+          type: number
+          format: float
+        chunk_text:
+          type: string
+          description: Anonymised chunk content (filtered text)
+        source_path:
+          type: string
+        document_id:
+          type: string
+        chunk_index:
+          type: integer
+
+    QueryResponse:
+      type: array
+      items:
+        $ref: "#/components/schemas/QueryHit"
+
+    UploadRedactResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        mode:
+          type: string
+          enum: [redact]
+        language:
+          type: string
+        filtered_preview:
+          type: string
+        written_path:
+          type: string
+          nullable: true
+          description: Path to `.redacted.txt` if write_redacted=true
+
+    UploadIngestResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        mode:
+          type: string
+          enum: [ingest]
+        language:
+          type: string
+        chunks_ingested:
+          type: integer
+        index_path:
+          type: string
+          example: data/index.faiss
+        metadata_path:
+          type: string
+          example: data/metadata.jsonl
+        redacted_sidecar_path:
+          type: string
+          description: Path to the `.redacted.txt` produced during ingest

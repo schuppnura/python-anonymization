@@ -1,128 +1,121 @@
 # query.py
-# Retrieval utilities for the anonymised RAG index.
-#
-# Functions:
-#   retrieve_top_k_chunks(query_text, index_path, metadata_path, embedding_model, k=5) -> list[dict]
-#     - Returns [{ "vector_id": int, "score": float, "chunk_text": str }, ...]
-#
-# Design rules:
-# - Functions start with verbs; no nested functions
-# - Validate inputs early; clear errors
-# - Separate I/O from core logic; return data, don’t print
-# - Comments explain why; state assumptions and side effects
+# Query the FAISS index and return filtered chunks with distances.
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
+import logging
+from pathlib import Path
+from typing import List, Dict, Any
 
-# FAISS is required for querying persisted vectors
-try:
-    import faiss  # type: ignore
-except Exception as e:
-    faiss = None
-
+import faiss  # type: ignore
 import numpy as np
+import ollama
 
-# Reuse the exact embedding stack used for ingestion to ensure vector space compatibility
-from anonymiser import create_embeddings, l2_normalise
+logger = logging.getLogger("query")
 
 
-def _load_index(index_path: Path):
+def load_index(index_path: Path):
     """
     Load a FAISS index from disk.
-    Assumptions:
-      - File exists and is a valid FAISS index.
+
+    Why: FAISS must be reloaded for each process that queries it.
+    How: verify the path exists and call faiss.read_index.
     """
-    if faiss is None:
-        raise RuntimeError("faiss not installed")
     p = Path(index_path)
     if not p.exists():
-        raise FileNotFoundError(f"Index not found: {p}")
+        raise FileNotFoundError(f"FAISS index not found at {p}")
     return faiss.read_index(str(p))
 
 
-def _read_metadata_subset(metadata_path: Path, ids: list[int]) -> dict[int, dict]:
+def load_metadata(metadata_path: Path) -> Dict[int, Dict[str, Any]]:
     """
-    Read only the records we need from metadata.jsonl, keyed by vector_id.
-    Why: metadata.jsonl can grow large; scanning once and filtering by id is simple and robust.
-    Side effects: file I/O read only.
+    Load chunk metadata keyed by vector_id.
+
+    Why: metadata JSONL provides provenance for results.
+    How: read each JSON line; map by vector_id; skip malformed lines.
     """
-    wanted = set(ids)
-    out: dict[int, dict] = {}
     p = Path(metadata_path)
     if not p.exists():
-        # Be explicit to surface misconfiguration
-        raise FileNotFoundError(f"Metadata file not found: {p}")
-
+        raise FileNotFoundError(f"Metadata JSONL not found at {p}")
+    by_id: Dict[int, Dict[str, Any]] = {}
     with p.open("r", encoding="utf-8") as f:
         for line in f:
-            if not wanted:
-                # Early exit once all ids are found (no break; use guard)
-                pass
+            line = line.strip()
+            if not line:
+                continue
             try:
                 obj = json.loads(line)
-            except Exception:
-                continue
-            vid = obj.get("vector_id")
-            if isinstance(vid, int) and vid in wanted and vid not in out:
-                out[vid] = obj
-                # Remove from wanted when satisfied
-                wanted.remove(vid)
-    return out
+                vid = int(obj["vector_id"])
+                by_id[vid] = obj
+            except Exception as e:
+                logger.warning("Skipping bad metadata line: %s (%s)", line[:120], e)
+    return by_id
 
 
-def _embed_query(query_text: str, embedding_model: str) -> np.ndarray:
+def embed_text(text: str, model_name: str) -> List[float]:
     """
-    Embed the query string with the same model used for ingestion.
-    Why: the vector space must match the index vectors.
-    Returns a (1, dim) float32 array normalised to unit length.
+    Create an embedding vector for the query text.
+
+    Why: must match the embedding model used at ingest time.
+    How: call ollama.embeddings(model=..., prompt=text).
     """
-    if not isinstance(query_text, str) or not query_text.strip():
-        raise ValueError("query_text must be a non-empty string")
-    vec = create_embeddings([query_text], model_name=embedding_model)[0]
-    vec = l2_normalise([vec])[0]
-    return np.array([vec], dtype="float32")
+    resp = ollama.embeddings(model=model_name, prompt=text)
+    return resp["embedding"]
 
 
-def retrieve_top_k_chunks(
+def l2_normalise(vec: List[float]) -> List[float]:
+    """
+    L2-normalise one vector.
+
+    Why: ensures distance magnitudes are comparable in IndexFlatL2.
+    How: divide by Euclidean norm (guard zero with 1.0).
+    """
+    import math
+    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+    return [x / norm for x in vec]
+
+
+def query_index(
     query_text: str,
     index_path: Path,
     metadata_path: Path,
     embedding_model: str,
-    k: int = 5,
-) -> list[dict]:
+    top_k: int = 5,
+) -> List[Dict[str, Any]]:
     """
-    Retrieve top-K anonymised chunks for a query.
-    Returns: list of { "vector_id": int, "score": float, "chunk_text": str }
-    Notes:
-      - 'score' is the FAISS L2 distance; lower is closer. You may convert to similarity if needed.
-      - Chunks already contain [FILTERED_*] placeholders when anonymisation was enabled at ingest time.
+    Query FAISS with a natural-language string and return top-k hits.
+
+    Why: retrieve anonymised chunks most relevant to the query.
+    How:
+        - Embed and L2-normalise the query
+        - FAISS search
+        - Join ids back to metadata
+    Side effects: none (read-only).
     """
-    if not isinstance(k, int) or k <= 0:
-        raise ValueError("k must be a positive integer")
+    if not isinstance(query_text, str) or not query_text.strip():
+        raise ValueError("query_text must be a non-empty string")
 
-    index = _load_index(Path(index_path))
-    q = _embed_query(query_text, embedding_model)
+    index = load_index(index_path)
+    meta_by_id = load_metadata(metadata_path)
 
-    # FAISS returns distances (D) and indices (I)
-    D, I = index.search(q, k)
-    ids = [int(i) for i in I[0] if i >= 0]
-    dists = [float(d) for d in D[0][: len(ids)]]
+    q = l2_normalise(embed_text(query_text, embedding_model))
+    qx = np.array([q], dtype="float32")
 
-    # Map vector ids to their anonymised chunk texts
-    meta_map = _read_metadata_subset(Path(metadata_path), ids)
+    k = max(1, int(top_k))
+    distances, ids = index.search(qx, k)
 
-    results: list[dict] = []
-    for i, vid in enumerate(ids):
-        # If metadata row is missing (inconsistent state), provide an empty snippet
-        chunk_text = ""
-        row = meta_map.get(vid)
-        if isinstance(row, dict):
-            chunk_text = row.get("chunk_text", "") or ""
+    results: List[Dict[str, Any]] = []
+    for dist, vid in zip(distances[0].tolist(), ids[0].tolist()):
+        if vid == -1:
+            continue
+        meta = meta_by_id.get(int(vid), {})
         results.append({
-            "vector_id": vid,
-            "score": dists[i],
-            "chunk_text": chunk_text,
+            "vector_id": int(vid),
+            "distance": float(dist),
+            "chunk_text": meta.get("chunk_text", ""),
+            "source_path": meta.get("source_path", ""),
+            "document_id": meta.get("document_id", ""),
+            "chunk_index": meta.get("chunk_index", -1),
         })
     return results

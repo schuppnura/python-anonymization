@@ -33,9 +33,6 @@ PII_IDENTIFIER_PATTERNS: Dict[str, str] = {
 
     # IBAN (up to 34 alphanumeric chars)
     "IBAN": r"\b[A-Z]{2}\d{2}[A-Z0-9]{1,30}\b",
-
-    # Phone numbers: allow +, spaces, dashes, min length enforced
-    "PHONE": r"\b(?:\+?\d[\d\s\-]{6,}\d)\b",
 }
 
 DATE_NUMERIC_ANY = r"\b[0-3]?\d[./-][0-1]?\d[./-]\d{2,4}\b"
@@ -115,8 +112,7 @@ SYSTEMPROMPT_PERSON = (
     "- EXCLUDE titles, roles, and legal qualifiers.\n"
     "- Do not include organizations or locations."
 )
-
-BIRTH_ADDR_SYSTEMPROMPT = (
+SYSTEMPROMPT_BIRTH_ADDR = (
     "You detect privacy-sensitive PII spans in text and MUST return valid JSON.\n"
     "Output requirements:\n"
     '1) Return JSON ONLY (no markdown, no code fences, no natural language).\n'
@@ -124,13 +120,27 @@ BIRTH_ADDR_SYSTEMPROMPT = (
     '3) Each key maps to a list of objects: {"start": <int>, "end": <int>} (0-based, end exclusive).\n'
     "4) Indices must be valid for the ORIGINAL text.\n"
 )
-
-BIRTH_ADDR_USERPROMPT_TEMPLATE = (
+USERPROMPT_BIRTH_ADDR_TEMPLATE = (
     "Find the character spans for the following labels in the text: DATE_OF_BIRTH, BIRTHPLACE, ADDRESS."
     "{lang_hint}\n"
     "Return JSON only, exactly in this structural form (keys and field names EXACTLY as shown):\n"
     '{{"DATE_OF_BIRTH":[{{"start":0,"end":1}}],"BIRTHPLACE":[{{"start":0,"end":1}}],"ADDRESS":[{{"start":0,"end":1}}]}}\n'
     "If none found for a label, return an empty list for that label.\n"
+    "Text:\n{text}"
+)
+SYSTEMPROMPT_PHONE = (
+    "You identify phone numbers only when context indicates a phone contact.\n"
+    "Return STRICT JSON with {\"spans\": [{\"label\":\"PHONE\",\"start\":int,\"end\":int}]}\n"
+    "Rules:\n"
+    "1) Only mark spans that begin with '+' and represent international phone numbers.\n"
+    "2) Require contextual cues nearby: e.g., 'tel', 'telephone', 'phone', 'tél', 'téléphone', 'gsm', 'mobile', 'call me at'.\n"
+    "3) Offsets are 0-based char positions on the ORIGINAL text; end is exclusive.\n"
+    "4) Output JSON only; no commentary."
+)
+USERPROMPT_PHONE_TEMPLATE = (
+    "Find PHONE spans where the text indicates a phone contact.\n"
+    "{lang_hint}\n"
+    "Return JSON only as: {{\"spans\":[{{\"label\":\"PHONE\",\"start\":..,\"end\":..}}, ...]}}\n"
     "Text:\n{text}"
 )
 
@@ -372,6 +382,7 @@ def call_ollama_json(model_name: str, systemprompt: str, userprompt: str) -> Dic
 
 # ============================ Span detectors ============================
 
+
 def detect_identifier_regex_spans(text: str) -> List[MaskSpan]:
     """
     Detect classic identifiers (email, phone, IBAN, BE RRN) via regex.
@@ -379,12 +390,84 @@ def detect_identifier_regex_spans(text: str) -> List[MaskSpan]:
     How: iterate patterns; append a span per match.
     """
     spans: List[MaskSpan] = []
-    for label in ["IBAN", "EMAIL", "PHONE", "BE_RRN"]:
+    for label in ["IBAN", "EMAIL", "BE_RRN"]:
         pat = PII_IDENTIFIER_PATTERNS[label]
         for m in re.finditer(pat, text, flags=re.IGNORECASE):
             spans.append(MaskSpan(m.start(), m.end(), label))
     return spans
+    
 
+def detect_phone_regex_spans(text: str) -> List[MaskSpan]:
+    """
+    Detect phone numbers in a strict, E.164-aware way (regex + post-validation).
+
+    Why:
+        Naive digit regexes create many false positives (UUIDs, IDs). E.164 allows a max
+        of 15 digits, starts with '+', and the first digit after '+' must be 1–9.
+        Many real-world formats include spaces, hyphens, dots, parentheses (including "(0)").
+    How:
+        1) Use a generous regex to capture candidates that start with '+' and include only
+           digits + common separators (space, dot, hyphen, parentheses).
+        2) Reject candidates containing letters.
+        3) Normalise by removing whitespace, hyphens, dots, parentheses; also remove an
+           optional "(0)" right after the country code (common formatting).
+        4) Count digits; require 7–15 digits.
+        5) Validate that the first digit after '+' is 1–9.
+        6) If valid, return a PERSONALLY IDENTIFIABLE INFORMATION (PII) span ("PHONE").
+
+    Side effects:
+        None.
+    """
+    spans: List[MaskSpan] = []
+
+    # 1) Broad candidate capture:
+    #    - Must start with '+'
+    #    - Then at least 6 more characters consisting of digits or separators
+    #    - This finds long-ish numbers and leaves precise validation to post-processing
+    candidate_re = re.compile(r"\+[0-9][0-9\s().\-]{5,}", re.UNICODE)
+
+    for m in candidate_re.finditer(text):
+        raw = m.group(0)
+
+        # 2) Hard reject: any letters disqualify the candidate
+        if re.search(r"[A-Za-z]", raw):
+            continue
+
+        # 3) Normalise for validation
+        #    Remove a formatting '(0)' after country code if present (e.g., +44 (0)20 ...)
+        #    We'll do this before stripping other separators so we don't miscount digits.
+        norm = re.sub(r"^\+([1-9]\d{0,2})\s*\(0\)", r"+\1", raw)  # drop (0) after CC if present
+
+        # strip all non-digit except the leading '+'
+        # keep the '+' at the front, remove separators ' ', '.', '-', '(', ')'
+        keep_plus = norm.startswith("+")
+        digits_only = re.sub(r"[^\d]", "", norm)  # raw digits only
+        if not keep_plus:
+            # shouldn't happen given regex, but be defensive
+            continue
+
+        # 4) Enforce digit count 7..15 (E.164 max = 15)
+        dcount = len(digits_only)
+        if dcount < 7 or dcount > 15:
+            continue
+
+        # 5) First digit after '+' must be 1..9 (country codes cannot start with 0)
+        #    Pull the first digit after '+' from the normalised string
+        first_digit_match = re.match(r"^\+([1-9])", norm.replace(" ", ""))
+        if not first_digit_match:
+            # Try again after removing all separators except '+' (pure plus+digits)
+            pure = "+" + digits_only
+            if not re.match(r"^\+([1-9])", pure):
+                continue
+
+        # If we reach here, the candidate looks like a valid international number.
+        s, e = trim_span_to_tokens(text, m.start(), m.end())
+        if e > s:
+            spans.append(MaskSpan(s, e, "PHONE"))
+
+    return spans
+    
+    
 def detect_birth_and_address_regex_spans(text: str, languages: Iterable[str]) -> List[MaskSpan]:
     """
     Detect birthplace (location only), long/numeric dates, and full postal addresses.
@@ -414,6 +497,7 @@ def detect_birth_and_address_regex_spans(text: str, languages: Iterable[str]) ->
         for m in re.finditer(rules["ADDRESS"], text, flags=re.IGNORECASE):
             spans.append(MaskSpan(m.start(), m.end(), "ADDRESS"))
     return spans
+    
 
 def detect_birthdate_context_spans(text: str, language: str) -> List[MaskSpan]:
     """
@@ -439,6 +523,7 @@ def detect_birthdate_context_spans(text: str, language: str) -> List[MaskSpan]:
         s, e = m.span(1)
         spans.append(MaskSpan(s, e, "DATE_OF_BIRTH"))
     return spans
+    
 
 def detect_residence_city_spans(text: str, language: str) -> List[MaskSpan]:
     """
@@ -454,6 +539,37 @@ def detect_residence_city_spans(text: str, language: str) -> List[MaskSpan]:
             spans.append(MaskSpan(s, e, "ADDRESS"))
     return spans
 
+
+def detect_phone_llm_spans(text: str, model_name: str, language: str) -> List[MaskSpan]:
+    """
+    Use an LLM to find phone numbers only when there is a phone-related cue (tel., phone, gsm, etc.)
+    AND the number starts with '+' (international format).
+    Why: avoid false positives; many non-phone tokens look numeric. The LLM provides context gating.
+    How: ask for spans; validate they start with '+'; trim edges; return MaskSpan list.
+    """
+    lang_hint = f"Language: {language}." if language else ""
+    userprompt = USERPROMPT_PHONE_TEMPLATE.format(lang_hint=lang_hint, text=text)
+    obj = call_ollama_json(model_name, SYSTEMPROMPT_PHONE, userprompt)
+
+    spans: List[MaskSpan] = []
+    if isinstance(obj, dict):
+        arr = obj.get("spans", [])
+        if isinstance(arr, list):
+            for item in arr:
+                if not isinstance(item, dict):
+                    continue
+                label = item.get("label")
+                s = item.get("start")
+                e = item.get("end")
+                if label == "PHONE" and isinstance(s, int) and isinstance(e, int) and 0 <= s < e <= len(text):
+                    frag = text[s:e]
+                    if frag.strip().startswith("+"):
+                        s2, e2 = trim_span_to_tokens(text, s, e)
+                        if e2 > s2:
+                            spans.append(MaskSpan(s2, e2, "PHONE"))
+    return spans
+    
+    
 def extract_birth_address_spans_llm(text: str, model_name: str, language: str) -> Dict[str, List[Tuple[int, int]]]:
     """
     Ask the local LLM (via call_ollama_json) to return character spans for DATE_OF_BIRTH, BIRTHPLACE, ADDRESS.
@@ -463,8 +579,8 @@ def extract_birth_address_spans_llm(text: str, model_name: str, language: str) -
     Side effects: network call to local model.
     """
     lang_hint = f" Language: {language}." if language else ""
-    userprompt = BIRTH_ADDR_USERPROMPT_TEMPLATE.format(lang_hint=lang_hint, text=text)
-    raw = call_ollama_json(model_name, BIRTH_ADDR_SYSTEMPROMPT, userprompt)
+    userprompt = USERPROMPT_BIRTH_ADDR_TEMPLATE.format(lang_hint=lang_hint, text=text)
+    raw = call_ollama_json(model_name, SYSTEMPROMPT_BIRTH_ADDR, userprompt)
 
     out: Dict[str, List[Tuple[int, int]]] = {"DATE_OF_BIRTH": [], "BIRTHPLACE": [], "ADDRESS": []}
     if not isinstance(raw, dict):
@@ -481,6 +597,7 @@ def extract_birth_address_spans_llm(text: str, model_name: str, language: str) -
                     out[label].append((s, e))
     return out
 
+
 def detect_birth_and_address_llm_spans(text: str, model_name: str, language: str) -> List[MaskSpan]:
     """
     Convert LLM span output into a flat List[MaskSpan] for the merger.
@@ -495,6 +612,7 @@ def detect_birth_and_address_llm_spans(text: str, model_name: str, language: str
             if e2 > s2:
                 spans.append(MaskSpan(s2, e2, label))
     return spans
+
 
 def extract_person_structs_llm(text: str, model_name: str) -> List[Dict[str, List[str]]]:
     """
@@ -513,6 +631,7 @@ def extract_person_structs_llm(text: str, model_name: str) -> List[Dict[str, Lis
             if given or family:
                 result.append({"given": given, "family": family})
     return result
+
 
 def generate_variants_for_person(person: Dict[str, List[str]]) -> List[str]:
     """
@@ -536,6 +655,7 @@ def generate_variants_for_person(person: Dict[str, List[str]]) -> List[str]:
             dedup.append(v)
             seen.add(v)
     return dedup
+
 
 def detect_person_name_llm_spans(text: str, model_name: str, language: str) -> List[MaskSpan]:
     """
@@ -564,6 +684,7 @@ def detect_person_name_llm_spans(text: str, model_name: str, language: str) -> L
 
     return spans
 
+
 def detect_final_safety_spans(text: str) -> List[MaskSpan]:
     """
     Run a final conservative safety sweep.
@@ -571,7 +692,7 @@ def detect_final_safety_spans(text: str) -> List[MaskSpan]:
     How: re-run identifier regexes (IBAN first), numeric dates, and a generic address pattern.
     """
     spans: List[MaskSpan] = []
-    for label in ["IBAN", "EMAIL", "PHONE", "BE_RRN"]:
+    for label in ["IBAN", "EMAIL", "BE_RRN"]:
         pat = PII_IDENTIFIER_PATTERNS[label]
         for m in re.finditer(pat, text, flags=re.IGNORECASE):
             spans.append(MaskSpan(m.start(), m.end(), label))
@@ -603,9 +724,11 @@ def filter_all(
 
     spans: List[MaskSpan] = []
     spans.extend(detect_identifier_regex_spans(original_text))
+    spans.extend(detect_phone_regex_spans(original_text))
     spans.extend(detect_birth_and_address_regex_spans(original_text, [primary_lang]))
     spans.extend(detect_residence_city_spans(original_text, primary_lang))
     spans.extend(detect_birthdate_context_spans(original_text, primary_lang))
+    spans.extend(detect_phone_llm_spans(original_text, llm_pii_model_name, language))
     spans.extend(detect_birth_and_address_llm_spans(original_text, llm_pii_model_name, primary_lang))
     spans.extend(detect_person_name_llm_spans(original_text, llm_pii_model_name, primary_lang))
     spans.extend(detect_final_safety_spans(original_text))

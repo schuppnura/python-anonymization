@@ -138,6 +138,14 @@ cython_debug/
 # UV
 uv.lock
 
+# IDE and Xcode
+*.xcworkspace/
+DerivedData/
+*.xcuserstate
+*.xcuserdatad/
+.vscode/
+.idea/
+
 # Project specific
 data/
 *.faiss
