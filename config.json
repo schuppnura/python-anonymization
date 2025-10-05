@@ -1,9 +1,10 @@
 {
   "embedding_model": "mxbai-embed-large",
+  "llm_pii_model_name": "mistral",
   "chunk_size": 800,
   "chunk_overlap": 120,
-  "llm_pii_model_name": "mistral",
+  "top_k": 5,
   "index_path": "data/index.faiss",
-  "metadata_path": "data/metadata.jsonl",
+  "metadata_path": "data/me tadata.jsonl",
   "redacted_path": "data"
 }

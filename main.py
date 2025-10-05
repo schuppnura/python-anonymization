@@ -1,21 +1,57 @@
-# main.py
-# Orchestration script for redact / ingest / query using anonymiser and document loader.
+#!/usr/bin/env python3
+"""
+CLI entry point for the privacy-preserving RAG pipeline.
+
+Why:
+    Provides a simple CLI around the anonymiser and query components.
+How:
+    - Loads config (JSON or YAML)
+    - Commands:
+        * redact <file>        → preview anonymisation or write .redacted.txt
+        * ingest <file>        → anonymise + embed + persist to FAISS/metadata
+        * query "<question>"   → retrieve top_k chunks from FAISS
+"""
+
+from __future__ import annotations
 
 import argparse
 import json
 import logging
 import sys
-import traceback
 import faulthandler
 from pathlib import Path
+from typing import Any, Dict
 
-from anonymiser import filter_all, process_text_to_faiss
+# Fail fast, no lazy imports
+import yaml  # type: ignore
+
+from anonymiser import process_text_to_faiss, filter_all
 from document_loader import read_document_to_text, detect_language
-from query import query_index  # implemented separately
+from query import query_index
 
-faulthandler.enable()
+# ----------------------------- Defaults -----------------------------
+
+DEFAULT_PATHS: Dict[str, Any] = {
+    "index_path": "data/index.faiss",
+    "metadata_path": "data/metadata.jsonl",
+    "redacted_path": "data",
+    "uploads_path": "data/uploads",
+}
+DEFAULT_LLM_CONFIG: Dict[str, Any] = {
+    "embedding_model": "mxbai-embed-large",
+    "llm_pii_model_name": "mistral",
+    "chunk_size": 800,
+    "chunk_overlap": 120,
+    "top_k": 5,
+}
+DEFAULT_CONFIG: Dict[str, Any] = {
+    **DEFAULT_PATHS,
+    **DEFAULT_LLM_CONFIG,
+}
 
 # ---------------- Logging ----------------
+faulthandler.enable()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -25,166 +61,175 @@ logger = logging.getLogger("main")
 for noisy in ("httpx", "httpcore", "uvicorn"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
-# ---------------- Default Config ----------------
-DEFAULT_LLM_CONFIG = {
-    "llm_pii_model_name": "mistral",
-    "embedding_model": "mxbai-embed-large",
+# ------------------------ Defaults ------------------------
+
+DEFAULT_PATHS: Dict[str, Any] = {
+    "index_path": "data/index.faiss",
+    "metadata_path": "data/metadata.jsonl",
+    "redacted_path": "data",
+    "uploads_path": "data/uploads",
 }
 
-DEFAULT_PATHS = {
-    "index_path": Path("data/index.faiss"),
-    "metadata_path": Path("data/metadata.jsonl"),
-    "redacted_path": Path("data"),   # redacted text output directory
+DEFAULT_LLM_CONFIG: Dict[str, Any] = {
+    "embedding_model": "mxbai-embed-large",
+    "llm_pii_model_name": "mistral",
     "chunk_size": 800,
     "chunk_overlap": 120,
+    "top_k": 5,
 }
 
-# ---------------- Orchestration ----------------
+DEFAULT_CONFIG: Dict[str, Any] = {
+    **DEFAULT_PATHS,
+    **DEFAULT_LLM_CONFIG,
+}
 
-def run_redact(args, cfg):
-    """
-    Redact a document and either print the filtered text or write it to disk.
+# ----------------------------- Config -----------------------------
 
-    Why:
-        The redact mode is for QA and quick verification of anonymisation
-        without indexing or persistence.
-    How:
-        - Load document text
-        - Detect its primary language
-        - Run anonymisation filter_all()
-        - Print to stdout or write to a .redacted.txt file under /data
-    Side effects:
-        Can create a redacted sidecar file on disk.
+def load_config(path: Path | None) -> Dict[str, Any]:
     """
+    Load configuration from JSON or YAML, merged over built-in defaults.
+    """
+    cfg = dict(DEFAULT_CONFIG)
+    if path is None:
+        return cfg
+    if not path.exists():
+        logger.warning("Config file not found at %s; using defaults.", path)
+        return cfg
+
     try:
-        text = read_document_to_text(args.input_path)
-        language = detect_language(text)
-        logger.info("Detected language: %s", language)
-
-        filtered = filter_all(
-            original_text=text,
-            language=language,
-            llm_pii_model_name=cfg["llm_pii_model_name"],
-            debug_report_path=Path("data") / "redaction_report.json",
-        )
-
-        if args.write_file:
-            out_name = f"{Path(args.input_path).stem}.redacted.txt"
-            out_path = DEFAULT_PATHS["redacted_path"] / out_name
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(filtered, encoding="utf-8")
-            logger.info("Redacted file written to %s", out_path)
+        if path.suffix.lower() in (".yaml", ".yml"):
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         else:
-            print(filtered)
-
-    except Exception:
-        logger.exception("Redact error")
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise ValueError("Config file must contain a top-level object")
+        cfg.update(loaded)
+    except Exception as exc:
+        logger.error("Failed to load config: %s", exc)
         raise
+    return cfg
 
 
-def run_ingest(args, cfg):
+# ----------------------------- Commands -----------------------------
+
+def run_redact(args: argparse.Namespace, cfg: Dict[str, Any]) -> int:
     """
-    Ingest a document into the FAISS vector store with anonymisation applied.
-
-    Why:
-        Ingestion is the RAG pipeline: it anonymises text, splits into chunks,
-        computes embeddings, and persists them to FAISS + metadata JSONL.
-    How:
-        - Read original text and detect language
-        - Call process_text_to_faiss with paths, models, chunking config
-        - Write updated FAISS index and metadata
-    Side effects:
-        Updates FAISS index and metadata.jsonl under /data.
+    Redact a document and print or write to .redacted.txt.
     """
-    try:
-        text = read_document_to_text(args.input_path)
-        language = detect_language(text)
-        logger.info("Detected language: %s", language)
+    input_path = Path(args.input_path)
+    text = read_document_to_text(str(input_path))
+    language = detect_language(text)
 
-        n_new = process_text_to_faiss(
-            original_text=text,
-            language=language,
-            source_path=Path(args.input_path),
-            index_path=DEFAULT_PATHS["index_path"],
-            metadata_path=DEFAULT_PATHS["metadata_path"],
-            redacted_path=DEFAULT_PATHS["redacted_path"],
-            chunk_size=DEFAULT_PATHS["chunk_size"],
-            chunk_overlap=DEFAULT_PATHS["chunk_overlap"],
-            embedding_model=cfg["embedding_model"],
-            llm_pii_model_name=cfg["llm_pii_model_name"],
-        )
-        logger.info("Ingested %d new chunks from %s", n_new, args.input_path)
+    redacted = filter_all(
+        original_text=text,
+        language=language,
+        llm_pii_model_name=str(cfg["llm_pii_model_name"]),
+        debug_report_path=None,
+    )
 
-    except Exception:
-        logger.exception("Ingestion error")
-        raise
+    if args.write_file:
+        out_dir = Path(cfg["redacted_path"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / f"{input_path.stem}.redacted.txt"
+        out_file.write_text(redacted, encoding="utf-8")
+        print(str(out_file))
+    else:
+        print(redacted)
+    return 0
 
 
-def run_query(args, cfg):
+def run_ingest(args: argparse.Namespace, cfg: Dict[str, Any]) -> int:
     """
-    Query the FAISS index with a natural-language query.
-
-    Why:
-        Query mode tests the RAG setup and retrieves top-k chunks
-        that were anonymised and embedded during ingestion.
-    How:
-        - Embed the query with the same embedding model
-        - Perform FAISS search
-        - Print JSON results with chunk_text and provenance
-    Side effects:
-        None (read-only).
+    Anonymise and ingest a document: store embeddings + metadata for retrieval.
     """
-    try:
-        results = query_index(
-            query_text=args.query,
-            index_path=DEFAULT_PATHS["index_path"],
-            metadata_path=DEFAULT_PATHS["metadata_path"],
-            embedding_model=cfg["embedding_model"],
-            top_k=args.top_k,
-        )
-        print(json.dumps(results, ensure_ascii=False, indent=2))
+    input_path = Path(args.input_path)
+    text = read_document_to_text(str(input_path))
+    language = detect_language(text)
 
-    except Exception:
-        logger.exception("Query error")
-        raise
+    n_new = process_text_to_faiss(
+        original_text=text,
+        language=language,
+        source_path=input_path,
+        index_path=Path(cfg["index_path"]),
+        metadata_path=Path(cfg["metadata_path"]),
+        redacted_path=Path(cfg["redacted_path"]),
+        chunk_size=int(cfg["chunk_size"]),
+        chunk_overlap=int(cfg["chunk_overlap"]),
+        embedding_model=str(cfg["embedding_model"]),
+        llm_pii_model_name=str(cfg["llm_pii_model_name"]),
+    )
 
-# ---------------- Main ----------------
+    print(f"Ingested {n_new} chunks from {input_path}")
+    return 0
 
-def main():
+
+def run_query(args: argparse.Namespace, cfg: Dict[str, Any]) -> int:
     """
-    Command-line entry point for the anonymisation pipeline.
-
-    Supports three subcommands:
-    - redact: Preview redaction only
-    - ingest: Anonymise and store vectors
-    - query: Query the FAISS store for similar chunks
+    Query the FAISS index and print top_k anonymised chunks as JSON.
     """
-    parser = argparse.ArgumentParser(description="Anonymiser pipeline")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    hits = query_index(
+        question=args.question,
+        index_path=Path(cfg["index_path"]),
+        metadata_path=Path(cfg["metadata_path"]),
+        embedding_model=str(cfg["embedding_model"]),
+        top_k=int(cfg["top_k"]),
+    )
+
+    for h in hits:
+        print(json.dumps(h, ensure_ascii=False))
+    return 0
+
+
+# ----------------------------- CLI -----------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    """Define CLI structure."""
+    parser = argparse.ArgumentParser(prog="main.py", description="Privacy-preserving RAG CLI")
+    parser.add_argument("--config", type=str, help="Path to config.json or .yaml", default=None)
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+
+    sub = parser.add_subparsers(dest="command", required=True)
 
     # redact
-    redact_parser = subparsers.add_parser("redact", help="Redact PII from a document")
-    redact_parser.add_argument("input_path", type=str, help="Path to document")
-    redact_parser.add_argument("--write-file", action="store_true", help="Write redacted text to /data")
+    pr = sub.add_parser("redact", help="Preview anonymisation of a document")
+    pr.add_argument("input_path", type=str, help="Path to input file (.pdf/.docx/.txt)")
+    pr.add_argument("--write-file", action="store_true", help="Write .redacted.txt instead of printing")
+    pr.set_defaults(func=run_redact)
 
     # ingest
-    ingest_parser = subparsers.add_parser("ingest", help="Ingest a document into FAISS")
-    ingest_parser.add_argument("input_path", type=str, help="Path to document")
+    pi = sub.add_parser("ingest", help="Anonymise + embed + persist to FAISS/metadata")
+    pi.add_argument("input_path", type=str, help="Path to input file (.pdf/.docx/.txt)")
+    pi.set_defaults(func=run_ingest)
 
     # query
-    query_parser = subparsers.add_parser("query", help="Query the FAISS index")
-    query_parser.add_argument("query", type=str, help="Query text")
-    query_parser.add_argument("--top-k", type=int, default=5, help="Number of results to return")
+    pq = sub.add_parser("query", help="Query anonymised FAISS index")
+    pq.add_argument("question", type=str, help="Natural-language query")
+    pq.set_defaults(func=run_query)
 
+    return parser
+
+
+# ----------------------------- Entry -----------------------------
+
+def main() -> int:
+    """Main entry point."""
+    parser = build_parser()
     args = parser.parse_args()
-    cfg = {**DEFAULT_LLM_CONFIG}
 
-    if args.command == "redact":
-        run_redact(args, cfg)
-    elif args.command == "ingest":
-        run_ingest(args, cfg)
-    elif args.command == "query":
-        run_query(args, cfg)
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+
+    cfg_path = Path(args.config) if args.config else None
+    cfg = load_config(cfg_path)
+
+    try:
+        return args.func(args, cfg)
+    except Exception as exc:
+        # Always print full traceback in case of error and exit non-zero
+        import traceback
+        traceback.print_exc()
+        logger.error("Fatal error: %s", exc)
+        return 1
 
 if __name__ == "__main__":
     try:

@@ -1026,35 +1026,3 @@ def process_text_to_faiss(
     append_metadata(metadata_path, records)
 
     return new_total - previous_total
-
-
-# ============================ Self-test ============================
-
-if __name__ == "__main__":
-    """
-    Minimal self-test to sanity-check anonymisation without the server.
-    Why: instant feedback that anchors are preserved and placeholders are clean.
-    How: run a few multilingual samples and print input/output pairs.
-    Assumptions: Ollama is running with the specified models locally.
-    """
-    samples = [
-        ("De heer SCHUPP Carlo, geboren te Brussel op 2 mei 1980.", "nl"),
-        ("Monsieur Jean Dupont, né à Paris le 14 juillet 1975.", "fr"),
-        ("Mr. John Smith, born in London on March 5, 1970.", "en"),
-        ("Mevrouw VANMARCKE Kristina, wonende te Gent, IBAN BE12 3456 7890 1234.", "nl"),
-    ]
-    print("=== Anonymiser self-test ===")
-    for txt, lang in samples:
-        print("\n--- Input ---")
-        print(txt)
-        try:
-            out = filter_all(
-                original_text=txt,
-                language=lang,
-                llm_pii_model_name="mistral",
-            )
-            print("--- Output ---")
-            print(out)
-        except Exception as exc:
-            print(f"Error: {exc}")
-    print("\n=== End of self-test ===")

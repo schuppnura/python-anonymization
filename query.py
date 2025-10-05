@@ -19,8 +19,10 @@ def load_index(index_path: Path):
     """
     Load a FAISS index from disk.
 
-    Why: FAISS must be reloaded for each process that queries it.
-    How: verify the path exists and call faiss.read_index.
+    Why:
+        FAISS indices are persisted by ingest and must be reloaded for querying.
+    How:
+        Read from the configured path; raise if missing.
     """
     p = Path(index_path)
     if not p.exists():
@@ -32,8 +34,10 @@ def load_metadata(metadata_path: Path) -> Dict[int, Dict[str, Any]]:
     """
     Load chunk metadata keyed by vector_id.
 
-    Why: metadata JSONL provides provenance for results.
-    How: read each JSON line; map by vector_id; skip malformed lines.
+    Why:
+        Retrieval needs to map FAISS ids back to chunk text and provenance.
+    How:
+        Read JSONL lines and index by vector_id; skip malformed lines with a warning.
     """
     p = Path(metadata_path)
     if not p.exists():
@@ -55,10 +59,12 @@ def load_metadata(metadata_path: Path) -> Dict[int, Dict[str, Any]]:
 
 def embed_text(text: str, model_name: str) -> List[float]:
     """
-    Create an embedding vector for the query text.
+    Create an embedding vector for the query.
 
-    Why: must match the embedding model used at ingest time.
-    How: call ollama.embeddings(model=..., prompt=text).
+    Why:
+        We must use the same embedding model as ingest to ensure vector space compatibility.
+    How:
+        Call ollama.embeddings and return the 'embedding' field.
     """
     resp = ollama.embeddings(model=model_name, prompt=text)
     return resp["embedding"]
@@ -68,8 +74,10 @@ def l2_normalise(vec: List[float]) -> List[float]:
     """
     L2-normalise one vector.
 
-    Why: ensures distance magnitudes are comparable in IndexFlatL2.
-    How: divide by Euclidean norm (guard zero with 1.0).
+    Why:
+        IndexFlatL2 expects comparable magnitudes for distance ranking.
+    How:
+        Divide by Euclidean norm (guard zero with 1.0).
     """
     import math
     norm = math.sqrt(sum(x * x for x in vec)) or 1.0
@@ -77,32 +85,34 @@ def l2_normalise(vec: List[float]) -> List[float]:
 
 
 def query_index(
-    query_text: str,
+    question: str,
     index_path: Path,
     metadata_path: Path,
     embedding_model: str,
     top_k: int = 5,
 ) -> List[Dict[str, Any]]:
     """
-    Query FAISS with a natural-language string and return top-k hits.
+    Query FAISS with a natural-language string and return top_k hits.
 
-    Why: retrieve anonymised chunks most relevant to the query.
+    Why:
+        Retrieve the most relevant anonymised chunks for downstream LLM answering.
     How:
         - Embed and L2-normalise the query
-        - FAISS search
+        - FAISS search (top_k)
         - Join ids back to metadata
-    Side effects: none (read-only).
+    Side effects:
+        None (read-only).
     """
-    if not isinstance(query_text, str) or not query_text.strip():
-        raise ValueError("query_text must be a non-empty string")
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError("question must be a non-empty string")
 
     index = load_index(index_path)
     meta_by_id = load_metadata(metadata_path)
 
-    q = l2_normalise(embed_text(query_text, embedding_model))
+    q = l2_normalise(embed_text(question, embedding_model))
     qx = np.array([q], dtype="float32")
-
     k = max(1, int(top_k))
+
     distances, ids = index.search(qx, k)
 
     results: List[Dict[str, Any]] = []
