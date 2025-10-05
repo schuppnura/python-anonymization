@@ -2,6 +2,8 @@
 
 A privacy-first document processing and retrieval system that combines local AI models (via Ollama) with FAISS vector storage to enable secure, GDPR-compliant retrieval-augmented generation (RAG).
 
+Please refer to our blog that elaborates on the why's and how's of this project: [Feed LLMs Carefully: A Filter-First RAG Architecture](https://nura.pro/2025/10/04/feed-llms-carefully-a-filter-first-rag-architecture/)
+
 **Version 2.0.0** — Includes an MCP-style FastAPI server, document upload & redaction endpoints, stronger privacy filtering, and unified configuration management.
 
 ## Overview
