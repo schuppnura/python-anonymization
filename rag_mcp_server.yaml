@@ -2,11 +2,10 @@ openapi: 3.1.0
 info:
   title: Privacy-Preserving RAG MCP Server
   version: 1.0.0
-  description: >
+  description: |
     API for anonymising documents (LLM + regex span masking), ingesting filtered
     text into FAISS, and querying anonymised chunks for RAG. The service never
     exposes raw PII; only filtered text with placeholders (e.g., [FILTERED_PERSON]).
-
 servers:
   - url: http://127.0.0.1:8000
 
@@ -22,6 +21,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
+              examples:
+                ok:
+                  summary: Service healthy
+                  value: { "status": "ok" }
+
+  /config:
+    get:
+      summary: Get active configuration
+      operationId: getConfig
+      responses:
+        "200":
+          description: Current configuration
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                default:
+                  summary: Example configuration
+                  value:
+                    index_path: "data/index.faiss"
+                    metadata_path: "data/metadata.jsonl"
+                    redacted_path: "data"
+                    uploads_path: "data/uploads"
+                    embedding_model: "mxbai-embed-large"
+                    llm_pii_model_name: "mistral"
+                    chunk_size: 800
+                    chunk_overlap: 120
+                    top_k: 5
 
   /redact:
     post:
@@ -33,6 +61,27 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/RedactRequest"
+            examples:
+              english_person_birth:
+                summary: Redact name and birth details (EN)
+                value:
+                  text: "Mr. John Smith, born in London on March 5, 1970."
+                  language_hint: "en"
+              dutch_identity:
+                summary: Redact Dutch identity info (NL)
+                value:
+                  text: "De heer Carlo Schupp, geboren te Brussel op 2 mei 1980."
+                  language_hint: "nl"
+              french_person:
+                summary: Redact French phrasing (FR)
+                value:
+                  text: "Monsieur Dupont, né à Paris le 14 juillet 1975."
+                  language_hint: "fr"
+              address_and_iban:
+                summary: Redact address and IBAN
+                value:
+                  text: "Mme Vanmarcke, résidant à Gand, IBAN BE12 3456 7890 1234."
+                  language_hint: "fr"
       responses:
         "200":
           description: Redacted preview returned
@@ -40,6 +89,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RedactResponse"
+              examples:
+                english_person_birth:
+                  summary: Redacted EN
+                  value:
+                    status: "ok"
+                    language: "en"
+                    filtered_preview: "Mr. [FILTERED_PERSON], born in [FILTERED_BIRTHPLACE] on [FILTERED_DATE_OF_BIRTH]."
+                dutch_identity:
+                  summary: Redacted NL
+                  value:
+                    status: "ok"
+                    language: "nl"
+                    filtered_preview: "De heer [FILTERED_PERSON], geboren te [FILTERED_BIRTHPLACE] op [FILTERED_DATE_OF_BIRTH]."
+                french_person:
+                  summary: Redacted FR
+                  value:
+                    status: "ok"
+                    language: "fr"
+                    filtered_preview: "Monsieur [FILTERED_PERSON], né à [FILTERED_BIRTHPLACE] le [FILTERED_DATE_OF_BIRTH]."
+                address_and_iban:
+                  summary: Address and IBAN filtered
+                  value:
+                    status: "ok"
+                    language: "fr"
+                    filtered_preview: "Mme [FILTERED_PERSON], résidant à [FILTERED_ADDRESS], [FILTERED_IBAN]."
         "400":
           description: Bad request
 
@@ -53,6 +127,27 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/QueryRequest"
+            examples:
+              french_legal_term:
+                summary: Query French contract term
+                value:
+                  question: "Que signifie Changement de Contrôle ?"
+                  top_k: 5
+              dutch_mandate:
+                summary: Query Dutch legal document
+                value:
+                  question: "Wat is een zorgvolmacht?"
+                  top_k: 5
+              english_clause:
+                summary: Query English business clause
+                value:
+                  question: "What is a Change of Control clause?"
+                  top_k: 5
+              generic_search:
+                summary: Generic search
+                value:
+                  question: "What is the main topic?"
+                  top_k: 3
       responses:
         "200":
           description: Top-k results from anonymised corpus
@@ -60,16 +155,53 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/QueryResponse"
+              examples:
+                french_legal_term:
+                  summary: Matches for 'Changement de Contrôle'
+                  value:
+                    - vector_id: 269
+                      distance: 0.6452
+                      chunk_text: "CHANGEMENT DE CONTROLE DU TITULAIRE ... [FILTERED_ADDRESS] ... changement de Contrôle ..."
+                      source_path: "data/InWebo_Group_OBSA.pdf"
+                      document_id: "d029de3de609c62c"
+                      chunk_index: 33
+                    - vector_id: 199
+                      distance: 0.7010
+                      chunk_text: "Par ailleurs l’Emetteur s’engage à informer ..."
+                      source_path: "data/InWebo_Group_-_Closing_(émission_OBSA).pdf"
+                      document_id: "69e7185260b038fb"
+                      chunk_index: 164
+                dutch_mandate:
+                  summary: Zorgvolmacht explanation
+                  value:
+                    - vector_id: 12
+                      distance: 0.5831
+                      chunk_text: "Een zorgvolmacht is een document waarmee u iemand machtigt ..."
+                      source_path: "data/Zorgvolmacht.redacted.txt"
+                      document_id: "abcd1234efgh5678"
+                      chunk_index: 5
+                english_clause:
+                  summary: Change of Control explanation
+                  value:
+                    - vector_id: 77
+                      distance: 0.6211
+                      chunk_text: "A Change of Control occurs when ownership or voting rights transfer ..."
+                      source_path: "data/Agreement.redacted.txt"
+                      document_id: "deadbeefcafefeed"
+                      chunk_index: 42
+                generic_search:
+                  summary: No strong matches
+                  value: []
         "404":
           description: Index or metadata not found
 
   /upload:
     post:
       summary: Upload a document for redact or ingest
-      description: >
+      description: |
         Multipart upload endpoint supporting two modes:
-        - **ingest**: anonymise, chunk, embed, and persist to FAISS/metadata; also writes a `.redacted.txt`.
-        - **redact**: anonymise only and return the filtered preview (no FAISS write).
+        - ingest: anonymise, chunk, embed, persist to FAISS/metadata; writes a `.redacted.txt`.
+        - redact: anonymise only and return the filtered preview (no FAISS write).
       operationId: postUpload
       requestBody:
         required: true
@@ -88,10 +220,9 @@ paths:
                   enum: [ingest, redact]
                 source_label:
                   type: string
-                  description: Optional label/path to store in metadata for provenance
                 language_hint:
                   type: string
-                  description: Optional language override (nl|fr|en); auto-detected if omitted
+                  enum: [nl, fr, en]
                 write_redacted:
                   type: boolean
                   description: If true in redact mode, write a sidecar `.redacted.txt` into /data
@@ -104,6 +235,42 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/UploadRedactResponse"
                   - $ref: "#/components/schemas/UploadIngestResponse"
+              examples:
+                redact_docx:
+                  summary: Redact a DOCX document
+                  value:
+                    status: "ok"
+                    mode: "redact"
+                    language: "nl"
+                    filtered_preview: "De heer [FILTERED_PERSON], geboren te [FILTERED_BIRTHPLACE] op [FILTERED_DATE_OF_BIRTH]."
+                    written_path: "data/Zorgvolmacht.redacted.txt"
+                ingest_pdf:
+                  summary: Ingest a PDF into FAISS
+                  value:
+                    status: "ok"
+                    mode: "ingest"
+                    language: "fr"
+                    chunks_ingested: 412
+                    index_path: "data/index.faiss"
+                    metadata_path: "data/metadata.jsonl"
+                    redacted_sidecar_path: "data/InWebo_Group_OBSA.redacted.txt"
+                redact_pdf:
+                  summary: Redact a PDF preview only
+                  value:
+                    status: "ok"
+                    mode: "redact"
+                    language: "fr"
+                    filtered_preview: "Monsieur [FILTERED_PERSON], né à [FILTERED_BIRTHPLACE] le [FILTERED_DATE_OF_BIRTH]."
+                upload_with_lang_hint:
+                  summary: Upload specifying language
+                  value:
+                    status: "ok"
+                    mode: "ingest"
+                    language: "fr"
+                    chunks_ingested: 220
+                    index_path: "data/index.faiss"
+                    metadata_path: "data/metadata.jsonl"
+                    redacted_sidecar_path: "data/mydoc.redacted.txt"
         "400":
           description: Bad request (unsupported file, missing parts)
         "500":
@@ -144,16 +311,15 @@ components:
         filtered_preview:
           type: string
           description: Text with placeholders (e.g., [FILTERED_PERSON])
-        # Optional: include a small QA artifact path if server writes one
         debug_report_path:
           type: string
           nullable: true
 
     QueryRequest:
       type: object
-      required: [query]
+      required: [question]
       properties:
-        query:
+        question:
           type: string
           description: Natural language query
         top_k:
