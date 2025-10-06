@@ -12,8 +12,9 @@ Please refer to our blog that elaborates on the why's and how's of this project:
 
 - CLI Mode (`main.py`) — Run local ingestion, redaction, and testing.
 - API Mode (`mcp_server.py`) — Expose the same functionality through an MCP-compatible FastAPI server.
+- MCP Mode (`mcp_adapter.py`) — Native Model Context Protocol server using FastMCP for direct LLM client integration.
 
-Both share the same anonymisation and FAISS back-end logic.
+All modes share the same anonymisation and FAISS back-end logic.
 
 ## How It Works
 
@@ -120,6 +121,49 @@ uvicorn mcp_server:app --host 127.0.0.1 --port 8000
 Interactive docs: http://127.0.0.1:8000/docs
 OpenAPI schema: http://127.0.0.1:8000/openapi.json
 
+## MCP Server (FastMCP)
+
+The MCP adapter provides a native Model Context Protocol interface using FastMCP, enabling direct integration with MCP-compatible LLM clients like Claude Desktop, Cline, or other MCP-aware applications.
+
+### Running the MCP Server
+
+```bash
+uv run mcp_adapter.py
+```
+
+Or run in the background:
+
+```bash
+nohup uv run mcp_adapter.py > mcp_adapter.log 2>&1 &
+```
+
+### MCP Tools Available
+
+| Tool | Purpose |
+|------|----------|
+| `get_config` | Retrieve current system configuration |
+| `redact_text` | Anonymize sensitive information in provided text |
+| `ingest_file` | Process and ingest documents into the FAISS index |
+| `query_corpus` | Perform semantic search against the document corpus |
+
+### Connecting MCP Clients
+
+For MCP-compatible clients, configure the server connection:
+
+```json
+{
+  "mcpServers": {
+    "privacy-rag": {
+      "command": "uv",
+      "args": ["run", "mcp_adapter.py"],
+      "cwd": "/path/to/Anonymization"
+    }
+  }
+}
+```
+
+The MCP server exposes the same core functionality as the API and CLI modes but through the standardized MCP protocol for seamless LLM integration.
+
 ## Configuration
 
 Example config.json:
@@ -159,6 +203,7 @@ uv run main.py query "What is the main topic?" --k 5
 Anonymization/
 ├── main.py
 ├── mcp_server.py
+├── mcp_adapter.py
 ├── query.py
 ├── document_loader.py
 ├── anonymiser.py
