@@ -15,6 +15,22 @@ Please refer to our blog that elaborates on the why's and how's of this project:
 
 Both share the same anonymisation and FAISS back-end logic.
 
+## How It Works
+
+The Anonymiser acts as a trusted layer between your personal data and the public LLM. Here is how it works:
+
+1. You use an LLM client (e.g. Claude or an LLM wrapper) and enter a prompt that needs a private document
+
+2. The LLM client calls the anonymiser via the standard MCP interface and requests the relevant document chunks
+
+3. The anonymiser manages the prompt locally with its own LLM (e.g. Mistral) and queries a vector store it has pre-built and locally curated
+
+4. The anonymiser reconstructs the curated, relevant document chunks and feeds these back to the LLM client as context
+
+5. The LLM client builds the final prompt with this context and submits it to the public LLM service, without leaking any private data
+
+6. The LLM responds with context-aware output
+
 ## Features
 
 - Privacy-First RAG — Only anonymised text is embedded or indexed.
