@@ -125,6 +125,8 @@ OpenAPI schema: http://127.0.0.1:8000/openapi.json
 
 The MCP adapter provides a native Model Context Protocol interface using FastMCP, enabling direct integration with MCP-compatible LLM clients like Claude Desktop, Cline, or other MCP-aware applications.
 
+Note that with FastMCP, OpenAI tools can be integrated through MCP with their Agents SDK.
+
 ### Running the MCP Server
 
 ```bash
